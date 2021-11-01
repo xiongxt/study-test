@@ -1,53 +1,98 @@
 import { VueConstructor } from "vue";
+import {
+  ReturnTypes,
+  Getter,
+  VueGetters,
+  InnerAction,
+  Action,
+  InnerCommit,
+  Commit,
+} from "./type";
 
 let Vue: VueConstructor;
-let storeManager: StoreManager;
 
-type AnyObject = Record<string, unknown>;
-
-class StoreManager {
-  reacitveWrap = new Vue<{ $$state: AnyObject }, AnyObject, AnyObject, never>({
-    data() {
-      return {
-        $$state: {},
-      };
-    },
-  });
-
-  get state() {
-    return (this.reacitveWrap as any)._data.$$state;
-  }
+function assert(condition: boolean, msg: string) {
+  if (!condition) throw new Error(`[vuex] ${msg}`);
 }
 
-interface Action<Payload> {
-  (payload: Payload): void;
-}
+export class Store<State, Getters extends Record<string, Getter<State>>> {
+  #defaultState?: State = undefined;
+  #vm?: InstanceType<VueConstructor> = undefined;
+  #commiting = false;
 
-interface InnerAction<State, Payload> {
-  (state: State, payload: Payload): void;
-}
+  getters: ReturnTypes<Getters> = {} as ReturnTypes<Getters>;
 
-export class Store<State> {
-  namespace = "";
+  constructor(defaultState: State, getters?: Getters) {
+    this.#defaultState = defaultState;
+    if (getters) {
+      this.wrapGetters(getters);
+    }
 
-  constructor(namespace: string, defaultState: State) {
-    this.namespace = namespace;
-    Vue.set(
-      (storeManager.reacitveWrap._data as any).$$state,
-      namespace,
-      defaultState
+    this.#vm = new Vue({
+      data: {
+        $$state: defaultState,
+      },
+      computed: (getters || {}) as VueGetters,
+    });
+
+    for (const name in getters || {}) {
+      if (name) {
+        Object.defineProperty(this.getters, name, {
+          get: () => (this.#vm as any)[name],
+          enumerable: true,
+        });
+      }
+    }
+
+    (this.#vm as any).$watch(
+      function (this: any) {
+        return this._data.$$state;
+      },
+      () => {
+        assert(
+          this.#commiting,
+          `do not mutate vuex store state outside mutation handlers.`
+        );
+      },
+      { deep: true, sync: true }
     );
   }
 
+  private wrapGetters(getters: Getters) {
+    for (const name in getters || {}) {
+      if (name) {
+        const getter = getters[name];
+        getters[name] = getter.bind(this, this.state) as any;
+      }
+    }
+  }
+
   get state(): State {
-    return storeManager.state[this.namespace] as State;
+    if (this.#vm) {
+      return (this.#vm as any)._data.$$state;
+    }
+    return this.#defaultState!;
   }
 
   createAction<Payload = any>(
-    cb: InnerAction<State, Payload>
+    callback: InnerAction<State, Payload>
   ): Action<Payload> {
-    const func = async function (this: Store<State>, payload: Payload) {
-      return await cb(this.state, payload);
+    const func = async function (
+      this: Store<State, Getters>,
+      payload: Payload
+    ) {
+      return await callback(this.state, payload);
+    }.bind(this);
+    return func;
+  }
+
+  createCommit<Payload = any>(
+    callback: InnerCommit<State, Payload>
+  ): Commit<Payload> {
+    const func = function (this: Store<State, Getters>, payload: Payload) {
+      this.#commiting = true;
+      callback(this.state, payload);
+      this.#commiting = false;
     }.bind(this);
     return func;
   }
@@ -55,14 +100,13 @@ export class Store<State> {
 
 function install(_Vue: VueConstructor): void {
   Vue = _Vue;
-  storeManager = new StoreManager();
 }
 
-function createStore<State extends Record<string, unknown>>(
-  namespace: string,
-  defaultState: State
-): Store<State> {
-  return new Store(namespace, defaultState);
+function createStore<
+  State extends Record<string, unknown>,
+  Getters extends Record<string, Getter<State>>
+>(defaultState: State, getters?: Getters): Store<State, Getters> {
+  return new Store(defaultState, getters);
 }
 
 export default {

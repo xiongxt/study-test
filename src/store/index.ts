@@ -1,14 +1,39 @@
 import Vue from "vue";
-import Vuex from "../f-vuex";
+import Vuex from "../f-vuex/index";
 
 Vue.use(Vuex);
 
-const store = Vuex.createStore("count", { count: 0 });
+export function sleep(time: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(() => {
+      resolve();
+    }, time);
+  });
+}
 
-const addCount = store.createAction<number>((state, paylod) => {
-  state.count += paylod;
+const store = Vuex.createStore(
+  { count: 0, name: "count" },
+  {
+    doubleCount(state) {
+      return state.count * 2;
+    },
+    namedCount(state) {
+      return (name: string) => {
+        return name + state.count;
+      };
+    },
+  }
+);
+
+const dispatchAddCount = store.createAction<number>(async (state, paylod) => {
+  await sleep(2000);
+  commitCount(state.count + paylod);
+});
+
+const commitCount = store.createCommit<number>((state, paylod) => {
+  state.count = paylod;
 });
 
 export default store;
 
-export { addCount };
+export { dispatchAddCount };
